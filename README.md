@@ -1,2 +1,2 @@
 # fragranceadvisor
-A machine learning model to suggest new perfumes based on user preferences and characteristics
+A web scraping robot to collect fragrance specifications (Python)
