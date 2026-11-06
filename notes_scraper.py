@@ -1,38 +1,69 @@
-from lxml import html
-import requests
+"""Scrape note pages and download their images using Patchright."""
+
 import json
-from notes_db_helper import NotesDBHelper
-import shutil
+from pathlib import Path
+from time import sleep
+from urllib.parse import urljoin
+
+from browser_client import FETCH_ERRORS, BrowserClient
+from db_helper import NotesDBHelper
+
+REQUEST_DELAY_SECONDS = 5
+IMAGE_DIR = Path("fragrantica_images/notes")
+
+
+def scrape_note(client, url):
+    """Fetch one note page and save its images. Returns (title, image file names)."""
+    tree = client.fetch_tree(url)
+    titles = tree.xpath("//h1/text()")
+    if not titles:
+        raise ValueError("No title found on {}".format(url))
+
+    note_title = titles[0]
+    note_image_file_names = []
+    for image_url in tree.xpath("//h3/following-sibling::div/div/img/@src"):
+        image_file_name = image_url.split("/")[-1]
+        note_image_file_names.append(image_file_name)
+        client.download_image(
+            urljoin(url, image_url), IMAGE_DIR / image_file_name
+        )
+
+    return note_title, note_image_file_names
 
 
 def main():
-    DB = NotesDBHelper("notes.sqlite")
-    DB.setup()
-    with open("notes_manifest.txt", "r") as f:
-        note_urls = f.readlines()
+    db = NotesDBHelper("notes.sqlite")
+    db.setup()
+    IMAGE_DIR.mkdir(parents=True, exist_ok=True)
+
+    with open("notes_manifest.txt", encoding="utf-8") as manifest:
+        note_urls = [line.strip() for line in manifest if line.strip()]
+
     number_of_notes = len(note_urls)
-    flag = DB.number_of_records()
-    for index in range(flag, number_of_notes):
-        try:
-            url = note_urls[index][:-1]
-            page = requests.get(url)
-            tree = html.fromstring(page.content)
-            note_title = tree.xpath("//h1/text()")[0]
-            note_image_urls = tree.xpath("//h3/following-sibling::div/div/img/@src")
-            note_image_file_names = []
-            for note_image_url in note_image_urls:
-                note_image_file_name = note_image_url.split("/")[-1]
-                note_image_file_names.append(note_image_file_name)
-                r = requests.get("http://www.fragrantica.com" + note_image_url, stream=True)
-                if r.status_code == 200:
-                    with open("fragrantica_images/notes/" + note_image_file_name, 'wb') as f:
-                        r.raw.decode_content = True
-                        shutil.copyfileobj(r.raw, f)
-            print({"count": "{0}/{1}".format(index, number_of_notes), "note": note_title})
-            DB.add_record(tuple([note_title, json.dumps(note_image_file_names)]))
-        except requests.exceptions.ConnectionError:
-            DB.add_record(tuple([note_title, None]))
-            continue
+    start_index = db.number_of_records()
+
+    try:
+        with BrowserClient() as client:
+            for index in range(start_index, number_of_notes):
+                note_title, image_names = scrape_note(client, note_urls[index])
+                print({
+                    "count": "{}/{}".format(index + 1, number_of_notes),
+                    "note": note_title,
+                })
+                db.add_record((note_title, json.dumps(image_names)))
+                sleep(REQUEST_DELAY_SECONDS)
+    except (*FETCH_ERRORS, ValueError) as exc:
+        print(
+            "Stopped at row {}: {}. Fix the problem and re-run to resume from this row.".format(
+                db.number_of_records(), exc
+            )
+        )
+        return 1
+    finally:
+        db.close()
+
+    return 0
+
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

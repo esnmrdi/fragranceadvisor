@@ -1,2 +1,30 @@
+# macOS / editors
 .DS_Store
 .vscode/
+
+# Python environments and caches (recreate with: python3 -m venv .venv && pip install -r requirements.txt)
+venv/
+.venv/
+env/
+__pycache__/
+*.py[cod]
+
+# Secrets
+.env
+
+# Scraper working files
+manifest.txt.tmp
+perfumes_manifest.txt.tmp
+perfumes_manifest.state.json
+perfumes_manifest.state.json.tmp
+fragrantica_images/
+
+# Generated pipeline intermediates (rebuild with: python export.py && python clean.py)
+perfumes.json
+perfumes_clean.json
+
+# SQLite journal files created next to the databases
+*.db-wal
+*.db-shm
+*.sqlite-wal
+*.sqlite-shm
