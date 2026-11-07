@@ -3,12 +3,10 @@
 import json
 import re
 from pathlib import Path
-from time import sleep
 
 from browser_client import FETCH_ERRORS, BrowserClient
 from db_helper import PerfumesDBHelper
 
-REQUEST_DELAY_SECONDS = 5
 IMAGE_DIR = Path("fragrantica_images/perfumes")
 PERFUME_URL = re.compile(
     r"/perfume/(?P<brand>[^/]+)/(?P<title>.+)-\d+\.html?$",
@@ -36,9 +34,7 @@ def scrape_perfume(client, url):
     if image_urls:
         perfume_image_url = image_urls[0]
         perfume_image_file_name = perfume_image_url.split("/")[-1]
-        client.download_image(
-            perfume_image_url, IMAGE_DIR / perfume_image_file_name
-        )
+        client.download_image(perfume_image_url, IMAGE_DIR / perfume_image_file_name)
     else:
         perfume_image_file_name = None
 
@@ -97,34 +93,50 @@ def main():
     db.setup()
     IMAGE_DIR.mkdir(parents=True, exist_ok=True)
 
-    with open("perfumes_manifest.txt", encoding="utf-8") as manifest:
-        perfume_urls = [line.strip() for line in manifest if line.strip()]
+    try:
+        with open("perfumes_manifest.txt", encoding="utf-8") as manifest:
+            perfume_urls = list(dict.fromkeys(
+                line.strip() for line in manifest if line.strip()
+            ))
+        db.migrate_legacy_progress(perfume_urls)
+        completed = db.completed_urls()
+    except (OSError, ValueError, RuntimeError) as exc:
+        print("Could not prepare perfume scrape: {}".format(exc))
+        db.close()
+        return 1
 
-    number_of_perfumes = len(perfume_urls)
-    start_index = db.number_of_records()
+    total = len(perfume_urls)
+    pending = [url for url in perfume_urls if url not in completed]
+    print(
+        "Perfume scrape: {} URLs in manifest, {} already complete, {} remaining.".format(
+            total, len(completed), len(pending)
+        ),
+        flush=True,
+    )
 
     try:
         with BrowserClient() as client:
-            for index in range(start_index, number_of_perfumes):
-                url = perfume_urls[index]
+            for position, url in enumerate(pending, start=1):
                 perfume, record = scrape_perfume(client, url)
+                db.add_record_for_url(url, record)
+                completed.add(url)
                 print({
-                    "count": "{}/{}".format(index + 1, number_of_perfumes),
+                    "progress": "{}/{}".format(position, len(pending)),
+                    "completed_total": len(completed),
                     "brand": record[0],
                     "perfume": perfume,
-                })
-                db.add_record(record)
-                sleep(REQUEST_DELAY_SECONDS)
+                }, flush=True)
     except (*FETCH_ERRORS, ValueError) as exc:
         print(
-            "Stopped at row {}: {}. Fix the problem and re-run to resume from this row.".format(
-                db.number_of_records(), exc
-            )
+            "Scrape paused: {}. {} URLs are recorded as complete; rerun to continue "
+            "with the remaining URLs.".format(len(completed), exc),
+            flush=True,
         )
         return 1
     finally:
         db.close()
 
+    print("Completed: {} perfume URLs processed.".format(len(completed)))
     return 0
 
 
