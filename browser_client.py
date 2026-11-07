@@ -11,7 +11,7 @@ from patchright.sync_api import Error as PatchrightError, sync_playwright
 
 BASE_URL = "https://www.fragrantica.com"
 REQUEST_TIMEOUT_MS = 60000
-REQUEST_DELAYS = (2.6, 9.9)
+REQUEST_DELAYS = (2.6, 3.6, 4.2, 5.7, 6.1)
 RATE_LIMIT_COOLDOWN_SECONDS = 300
 RETRY_AFTER_BUFFER_SECONDS = 2
 HEADLESS = False
