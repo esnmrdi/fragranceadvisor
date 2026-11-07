@@ -26,6 +26,71 @@ def note_titles(tree, label):
     return [img.get("title") for img in imgs] or None
 
 
+def _labels(texts):
+    """Whitespace-normalised, non-empty, de-duplicated strings in their original order."""
+    seen, ordered = set(), []
+    for text in texts:
+        text = " ".join(str(text).split())
+        if text and text not in seen:
+            seen.add(text)
+            ordered.append(text)
+    return ordered
+
+
+def page_image_url(tree):
+    """The bottle photo (.../mdimg/perfume/o.<id>.jpg).
+
+    Pages carry several og:image tags and the first is a generated social card, so pick
+    the photo explicitly; this is also the file name the original dataset stored."""
+    urls = tree.xpath("//meta[@property='og:image']/@content")
+    for url in urls:
+        if "/mdimg/perfume/o." in url:
+            return url
+    return (tree.xpath("//img[@itemprop='image']/@src") or urls or [None])[0]
+
+
+def page_main_accords(tree):
+    """Main accord names, strongest first, or None."""
+    accords = _labels(tree.xpath(
+        "//h6[normalize-space()='main accords']/following-sibling::div[1]"
+        "//span[contains(@class, 'truncate')]/text()"
+    ))
+    if not accords:  # layout used until 2022
+        accords = [
+            accord for accord in tree.xpath("//div[@id='prettyPhotoGallery']/div/div/span/text()")
+            if accord not in ("Videos", "Pictures", "main accords")
+        ]
+    return accords or None
+
+
+def page_notes(tree):
+    """Notes as {"top": [...], "middle": [...], "base": [...]}, {"general": [...]} for pages
+    without a pyramid, or None."""
+    levels = {}
+    for level in tree.xpath("//pyramid-level-new[@notes]"):
+        names = levels.setdefault(level.get("notes"), [])
+        for label in _labels(level.xpath(".//span[contains(@class, 'pyramid-note-label')]/text()")):
+            if label not in names:  # the page can render the pyramid more than once
+                names.append(label)
+    levels = {key: names for key, names in levels.items() if names}
+    if levels:
+        if set(levels) <= {"top", "middle", "base"}:
+            return {key: levels.get(key) or None for key in ("top", "middle", "base")}
+        return {"general": [name for names in levels.values() for name in names]}
+
+    # layout used until 2022
+    captions = tree.xpath("//h3/text()")
+    if "Fragrance Notes" in captions:
+        return {"general": [tag.get("title") for tag in tree.xpath("//span[@class='rtgNote']/img")]}
+    if "Perfume Pyramid" in captions:
+        return {
+            "top": note_titles(tree, "Top Notes"),
+            "middle": note_titles(tree, "Middle Notes"),
+            "base": note_titles(tree, "Base Notes"),
+        }
+    return None
+
+
 def _skeleton_pair(text):
     """Lowercase letters and digits of `text`, in two forms: accents folded (é -> e) and
     accented letters dropped (é -> nothing). URL slugs treat accents either way."""
@@ -114,13 +179,10 @@ def scrape_perfume(client, url):
     page_title_name = find_name(names, url_title)
     brand = page_brand or url_brand
 
-    image_urls = tree.xpath("//meta[@property='og:image']/@content")
-    if image_urls:
-        perfume_image_url = image_urls[0]
+    perfume_image_url = page_image_url(tree)
+    if perfume_image_url:
         perfume_image_file_name = perfume_image_url.split("/")[-1]
-        client.download_image(
-            perfume_image_url, IMAGE_DIR / perfume_image_file_name
-        )
+        client.download_image(perfume_image_url, IMAGE_DIR / perfume_image_file_name)
     else:
         perfume_image_file_name = None
 
@@ -136,24 +198,12 @@ def scrape_perfume(client, url):
         "page_title": page_title,
     }
 
-    main_accords = [
-        accord for accord in tree.xpath("//div[@id='prettyPhotoGallery']/div/div/span/text()")
-        if accord not in ("Videos", "Pictures", "main accords")
-    ] or None
+    main_accords = page_main_accords(tree)
+    notes = page_notes(tree)
 
-    notes_captions = tree.xpath("//h3/text()")
-    if "Fragrance Notes" in notes_captions:
-        note_tags = tree.xpath("//span[@class='rtgNote']/img")
-        notes = {"general": [tag.get("title") for tag in note_tags]}
-    elif "Perfume Pyramid" in notes_captions:
-        notes = {
-            "top": note_titles(tree, "Top Notes"),
-            "middle": note_titles(tree, "Middle Notes"),
-            "base": note_titles(tree, "Base Notes"),
-        }
-    else:
-        notes = None
-
+    # NOTE: on the current site these two vote tables are filled in by script after the page
+    # opens (and only once scrolled into view), so they may come back empty; see the coverage
+    # line the scraper prints when it finishes.
     longevity_votes = tree.xpath("//table[@class='voteLS long']/tr/td[@class='ndSum']/text()")
     if len(longevity_votes) >= 5:
         longevity = {
@@ -204,6 +254,9 @@ def main(argv=None):
     if args.limit is not None:
         end_index = min(number_of_perfumes, start_index + args.limit)
     from_page = {"title": 0, "brand": 0}
+    # How many scraped rows actually have each field, so an extraction that stops working
+    # (e.g. after a site redesign) shows up after a short test run instead of a long crawl.
+    filled = dict.fromkeys(("year", "accords", "notes", "longevity", "sillage"), 0)
 
     try:
         with BrowserClient() as client:
@@ -212,6 +265,9 @@ def main(argv=None):
                 perfume, record = scrape_perfume(client, url)
                 from_page["title"] += perfume["title_source"] == "page"
                 from_page["brand"] += perfume["brand_source"] == "page"
+                filled["year"] += record[2] is not None
+                for field, value in zip(("accords", "notes", "longevity", "sillage"), record[3:]):
+                    filled[field] += value != "null"
                 print({
                     "count": "{}/{}".format(index + 1, number_of_perfumes),
                     "brand": record[0],
@@ -239,6 +295,9 @@ def main(argv=None):
                 scraped, from_page["title"], from_page["brand"]
             )
         )
+        print("Rows with: " + ", ".join(
+            "{} {}/{}".format(field, count, scraped) for field, count in filled.items()
+        ))
     return 0
 
 

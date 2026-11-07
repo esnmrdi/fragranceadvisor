@@ -92,8 +92,17 @@ python perfumes_scraper.py --db scratch.sqlite --limit 20
 ```
 
 Each printed row shows `names_from`, which should be `page/page` for nearly
-every perfume, and the final line counts how many names came from the page.
-Delete `scratch.sqlite` afterwards.
+every perfume. The final lines count how many names came from the page and how
+many rows have a year, accords, notes, longevity and sillage. A field that is
+near zero means the site's page layout changed and its selectors need updating,
+which is much cheaper to find out here than after a full crawl. Delete
+`scratch.sqlite` afterwards.
+
+Fragrantica redesigned its pages after the original data was collected, so
+`perfumes_scraper.py` reads both layouts (the new one first). Accords and notes
+are in the page HTML and are read from there. Longevity and sillage votes are
+filled in by script after the page opens, so they may come back empty until the
+scraper scrolls and waits for them.
 
 ### Rebuilding the database
 
