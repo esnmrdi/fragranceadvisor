@@ -3,12 +3,10 @@
 import json
 import re
 from pathlib import Path
-from time import sleep
 from urllib.parse import urljoin, urlsplit
 
 from browser_client import BASE_URL, FETCH_ERRORS, BrowserClient, CloudflareChallengeError
 
-REQUEST_DELAY_SECONDS = 10
 OUTPUT_PATH = Path("perfumes_manifest.txt")
 TEMP_OUTPUT_PATH = Path("perfumes_manifest.txt.tmp")
 STATE_PATH = Path("perfumes_manifest.state.json")
@@ -86,9 +84,8 @@ def main():
                 for current_country_index in range(country_index, len(COUNTRIES)):
                     country = COUNTRIES[current_country_index]
                     country_url = urljoin(BASE_URL, "/country/{}.html".format(country))
-                    print("[Country] {}".format(country_url))
+                    print("[Country] {}".format(country_url), flush=True)
                     country_tree = client.fetch_tree(country_url)
-                    sleep(REQUEST_DELAY_SECONDS)
 
                     brand_hrefs = list(dict.fromkeys(
                         href for href in country_tree.xpath(
@@ -109,7 +106,7 @@ def main():
                         brand_url = urljoin(BASE_URL, brand_hrefs[current_brand_index])
                         print("[Designer {}/{}] {}".format(
                             current_brand_index + 1, len(brand_hrefs), brand_url
-                        ))
+                        ), flush=True)
                         brand_tree = client.fetch_tree(brand_url)
 
                         perfume_hrefs = list(dict.fromkeys(
@@ -136,8 +133,7 @@ def main():
 
                         print("[Saved] {} new URLs; {} total unique URLs.".format(
                             added, len(seen)
-                        ))
-                        sleep(REQUEST_DELAY_SECONDS)
+                        ), flush=True)
 
                     save_progress(current_country_index + 1, 0)
                     brand_index = 0
