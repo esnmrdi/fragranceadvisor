@@ -12,6 +12,8 @@ from patchright.sync_api import Error as PatchrightError, sync_playwright
 BASE_URL = "https://www.fragrantica.com"
 REQUEST_TIMEOUT_MS = 60000
 REQUEST_DELAYS = (2.5, 10.0)
+IMAGE_DELAYS = (0.5, 1.5)  # images come from the CDN right after a page; no need to wait as long
+MAX_RATE_LIMIT_RETRIES = 5
 RATE_LIMIT_COOLDOWN_SECONDS = 300
 RETRY_AFTER_BUFFER_SECONDS = 2
 HEADLESS = False
@@ -90,14 +92,9 @@ class BrowserClient:
                 self._playwright.stop()
 
     @staticmethod
-    def _pace_request(url, operation):
+    def _pace_request(delays=REQUEST_DELAYS):
         """Add a small randomized pause before each outbound request."""
-        delay = random.uniform(*REQUEST_DELAYS)
-        print(
-            "Waiting {:.1f} seconds before {} {}.".format(delay, operation, url),
-            flush=True,
-        )
-        sleep(delay)
+        sleep(random.uniform(*delays))
 
     @staticmethod
     def _rate_limit_wait(url, headers, operation):
@@ -138,8 +135,8 @@ class BrowserClient:
 
     def fetch_tree(self, url, timeout_ms=None):
         """Navigate, retry HTTP 429 after the required cooldown, and parse HTML."""
-        while True:
-            self._pace_request(url, "loading")
+        for _attempt in range(MAX_RATE_LIMIT_RETRIES + 1):
+            self._pace_request()
             response = self.page.goto(
                 url,
                 wait_until="domcontentloaded",
@@ -150,7 +147,8 @@ class BrowserClient:
 
             # Handle 429 before challenge and generic HTTP error checks.
             if response.status == 429:
-                self._rate_limit_wait(url, response.headers, "loading")
+                if _attempt < MAX_RATE_LIMIT_RETRIES:
+                    self._rate_limit_wait(url, response.headers, "loading")
                 continue
 
             challenge_reason = cloudflare_challenge_reason(self.page)
@@ -166,6 +164,11 @@ class BrowserClient:
                 raise RuntimeError(detail)
 
             return html.fromstring(self.page.content())
+        raise RuntimeError(
+            "HTTP 429 for {} after {} retries; the site is rate limiting this crawl".format(
+                url, MAX_RATE_LIMIT_RETRIES
+            )
+        )
 
     def download_image(self, image_url, destination):
         """Download an image, retrying HTTP 429 after the required cooldown."""
@@ -175,17 +178,18 @@ class BrowserClient:
 
         destination.parent.mkdir(parents=True, exist_ok=True)
 
-        while True:
-            self._pace_request(image_url, "downloading image")
+        for _attempt in range(MAX_RATE_LIMIT_RETRIES + 1):
+            self._pace_request(IMAGE_DELAYS)
             response = self.context.request.get(
                 image_url,
                 timeout=self.timeout_ms,
             )
             try:
                 if response.status == 429:
-                    self._rate_limit_wait(
-                        image_url, response.headers, "downloading image"
-                    )
+                    if _attempt < MAX_RATE_LIMIT_RETRIES:
+                        self._rate_limit_wait(
+                            image_url, response.headers, "downloading image"
+                        )
                     continue
 
                 if not response.ok:
@@ -199,3 +203,8 @@ class BrowserClient:
                 return
             finally:
                 response.dispose()
+        raise RuntimeError(
+            "HTTP 429 downloading image {} after {} retries".format(
+                image_url, MAX_RATE_LIMIT_RETRIES
+            )
+        )

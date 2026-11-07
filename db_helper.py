@@ -1,5 +1,7 @@
 """SQLite helpers for scraper data and URL-based progress tracking."""
 
+import json
+import re
 import sqlite3
 
 
@@ -106,11 +108,50 @@ class _TableDB:
         self.conn.close()
 
 
+def _page_id(text):
+    """The numeric Fragrantica id at the end of a page URL (...-12345.html), or None."""
+    match = re.search(r"-(\d+)\.html?$", text or "")
+    return match.group(1) if match else None
+
+
 class PerfumesDBHelper(_TableDB):
     table = "perfumes"
     columns = (
         "brand", "perfume", "launch_year", "main_accords", "notes", "longevity", "sillage",
     )
+
+    def migrate_legacy_progress(self, manifest_urls):
+        """Mark URLs complete by matching the bottle image id (o.<id>.jpg) saved in each
+        row against the id in the URL. Unlike counting rows, this stays correct when the
+        manifest changed or the old crawl skipped or repeated a page; those URLs are simply
+        scraped again. Falls back to row counting only if no row carries an image id."""
+        if self.conn.execute("SELECT COUNT(*) FROM scrape_progress").fetchone()[0]:
+            return 0
+        ids = set()
+        for (raw,) in self.conn.execute("SELECT perfume FROM perfumes"):
+            try:
+                image = json.loads(raw).get("image")
+            except (ValueError, AttributeError, TypeError):
+                continue
+            match = re.match(r"o\.(\d+)\.", image or "")
+            if match:
+                ids.add(match.group(1))
+        if not ids:
+            return super().migrate_legacy_progress(manifest_urls)
+        done = [url for url in dict.fromkeys(manifest_urls) if _page_id(url) in ids]
+        with self.conn:
+            self.conn.executemany(
+                "INSERT OR IGNORE INTO scrape_progress (url) VALUES (?)",
+                ((url,) for url in done),
+            )
+        print(
+            "Migrated {} legacy records to URL-based progress by matching image ids "
+            "({} of {} manifest URLs still to scrape).".format(
+                len(done), len(set(manifest_urls)) - len(done), len(set(manifest_urls))
+            ),
+            flush=True,
+        )
+        return len(done)
 
 
 class NotesDBHelper(_TableDB):
