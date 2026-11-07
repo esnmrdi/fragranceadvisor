@@ -2,13 +2,11 @@
 
 import json
 from pathlib import Path
-from time import sleep
 from urllib.parse import urljoin
 
 from browser_client import FETCH_ERRORS, BrowserClient
 from db_helper import NotesDBHelper
 
-REQUEST_DELAY_SECONDS = 5
 IMAGE_DIR = Path("fragrantica_images/notes")
 
 
@@ -24,9 +22,7 @@ def scrape_note(client, url):
     for image_url in tree.xpath("//h3/following-sibling::div/div/img/@src"):
         image_file_name = image_url.split("/")[-1]
         note_image_file_names.append(image_file_name)
-        client.download_image(
-            urljoin(url, image_url), IMAGE_DIR / image_file_name
-        )
+        client.download_image(urljoin(url, image_url), IMAGE_DIR / image_file_name)
 
     return note_title, note_image_file_names
 
@@ -36,32 +32,49 @@ def main():
     db.setup()
     IMAGE_DIR.mkdir(parents=True, exist_ok=True)
 
-    with open("notes_manifest.txt", encoding="utf-8") as manifest:
-        note_urls = [line.strip() for line in manifest if line.strip()]
+    try:
+        with open("notes_manifest.txt", encoding="utf-8") as manifest:
+            note_urls = list(dict.fromkeys(
+                line.strip() for line in manifest if line.strip()
+            ))
+        db.migrate_legacy_progress(note_urls)
+        completed = db.completed_urls()
+    except (OSError, ValueError, RuntimeError) as exc:
+        print("Could not prepare notes scrape: {}".format(exc))
+        db.close()
+        return 1
 
-    number_of_notes = len(note_urls)
-    start_index = db.number_of_records()
+    total = len(note_urls)
+    pending = [url for url in note_urls if url not in completed]
+    print(
+        "Notes scrape: {} URLs in manifest, {} already complete, {} remaining.".format(
+            total, len(completed), len(pending)
+        ),
+        flush=True,
+    )
 
     try:
         with BrowserClient() as client:
-            for index in range(start_index, number_of_notes):
-                note_title, image_names = scrape_note(client, note_urls[index])
+            for position, url in enumerate(pending, start=1):
+                note_title, image_names = scrape_note(client, url)
+                db.add_record_for_url(url, (note_title, json.dumps(image_names)))
+                completed.add(url)
                 print({
-                    "count": "{}/{}".format(index + 1, number_of_notes),
+                    "progress": "{}/{}".format(position, len(pending)),
+                    "completed_total": len(completed),
                     "note": note_title,
-                })
-                db.add_record((note_title, json.dumps(image_names)))
-                sleep(REQUEST_DELAY_SECONDS)
+                }, flush=True)
     except (*FETCH_ERRORS, ValueError) as exc:
         print(
-            "Stopped at row {}: {}. Fix the problem and re-run to resume from this row.".format(
-                db.number_of_records(), exc
-            )
+            "Scrape paused: {}. {} URLs are recorded as complete; rerun to continue "
+            "with the remaining URLs.".format(len(completed), exc),
+            flush=True,
         )
         return 1
     finally:
         db.close()
 
+    print("Completed: {} note URLs processed.".format(len(completed)))
     return 0
 
 
