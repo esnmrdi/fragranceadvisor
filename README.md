@@ -68,6 +68,41 @@ Both scrapers use the shared Patchright browser client and download images
 through the same browser context. They retain the existing SQLite schemas and
 resume from the number of records already saved.
 
+### Names and years
+
+Fragrantica's URLs have already lost apostrophes, periods, ampersands and
+accents (`Victoria-s-Secret`), so building names from the URL gives
+`Victoria S Secret`. `perfumes_scraper.py` therefore looks through the page's own
+text for the words whose letters and digits match the URL and keeps them as
+written there (`Victoria's Secret`, `D.S. & Durga`, `Bohème`). If nothing on the
+page matches, it falls back to the URL's spelling. The launch year comes from the
+page title, or from the "launched in YYYY" sentence when the title has none.
+
+Each row records where its names came from (`title_source` / `brand_source`,
+either `page` or `url`) and the raw page title inside the `perfume` JSON, so
+names and years can be re-derived later without re-crawling. `clean.py` leaves
+`page` names exactly as scraped and only re-cases the `url` ones.
+
+### Trying it before a long crawl
+
+Check the extraction on a few pages with a scratch database first:
+
+```bash
+python perfumes_scraper.py --db scratch.sqlite --limit 20
+```
+
+Each printed row shows `names_from`, which should be `page/page` for nearly
+every perfume, and the final line counts how many names came from the page.
+Delete `scratch.sqlite` afterwards.
+
+### Rebuilding the database
+
+The scraper resumes from the number of rows already in `perfumes.sqlite`, so with
+the existing (complete) file it has nothing left to do. To re-scrape everything,
+move or delete `perfumes.sqlite` first, then rerun the scraper and the
+export/clean/build steps below. Perfume ids and slugs are derived from the names,
+so they change wherever a name changes.
+
 ## Pipeline
 
 1. `perfumes_extract_manifest.py` / `notes_extract_manifest.py` - collect page URLs.

@@ -43,7 +43,7 @@ def _titleish(s: str) -> str:
     """Capitalize like a title but keep small words lowercase (except the first word)."""
     if not s:
         return s
-    small = {"de", "du", "des", "and", "of", "the", "a", "an", "pour", "eau"}
+    small = {"de", "du", "des", "and", "of", "the", "a", "an", "pour", "by"}
     parts = re.split(r'(\s+|-|/)', s.strip())
     out = []
     first = True
@@ -146,12 +146,20 @@ def _parse_main_accords(raw):
 
 
 def _best_name(p):
-    title = _perfume_info(p).get("title")
-    return _titleish(_canon_spaces(title)) if isinstance(title, str) else ""
+    info = _perfume_info(p)
+    title = info.get("title")
+    if not isinstance(title, str):
+        return ""
+    title = _canon_spaces(title)
+    # Names the scraper read from the page are already correctly written; only the ones
+    # rebuilt from the URL slug (all older data) need re-casing.
+    return title if info.get("title_source") == "page" else _titleish(title)
 
 
 def _best_brand(p):
     brand = _canon_spaces(str(p.get("brand") or ""))
+    if _perfume_info(p).get("brand_source") == "page":
+        return brand
     return BRAND_ALIASES.get(brand.lower()) or _titleish(brand)
 
 
@@ -234,6 +242,8 @@ def clean(input_file="perfumes.json", output_file="perfumes_clean.json", report=
         print(f"Total: {total}")
         print(f"With year: {with_year} ({with_year * 100 // max(total, 1)}%)")
         print(f"Empty names: {empty_name}")
+        from_page = sum(1 for p in data if _perfume_info(p).get("title_source") == "page")
+        print(f"Names taken from the page: {from_page} (the rest were rebuilt from URL slugs)")
         print(f"Avg notes per perfume: {avg_notes:.2f}")
 
     print(f"✅ Wrote {output_file} (no sillage)")
