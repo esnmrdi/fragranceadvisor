@@ -13,11 +13,13 @@ WS = re.compile(r"\s+")
 LON_KEYS = {
     "very long lasting": "very long lasting",
     "verylonglasting": "very long lasting",
+    "eternal": "very long lasting",  # the redesigned site's name for the top level
     "long lasting": "long lasting",
     "longlasting": "long lasting",
     "moderate": "moderate",
     "weak": "weak",
     "poor": "poor",
+    "very weak": "poor",  # the redesigned site's name for the bottom level
 }
 
 BRAND_ALIASES = {

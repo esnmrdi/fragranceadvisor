@@ -63,19 +63,39 @@ def page_main_accords(tree):
     return accords or None
 
 
+PYRAMID_BOX = "//*[contains(concat(' ', normalize-space(@class), ' '), ' pyramid-level-container ')]"
+PYRAMID_LEVELS = ("top", "middle", "base")
+
+
+def _pyramid_level(box):
+    """Which level a note container belongs to: top, middle, base, or another label
+    (single-ingredient fragrances use 'ingredients'; unknown becomes 'general').
+
+    In the page as served, a wrapper tag carries the level. Once the page's own script has
+    run, the wrapper is gone, so fall back to the 'Top Notes' style heading just above."""
+    level = box.xpath("ancestor::pyramid-level-new[1]/@notes")
+    if level:
+        return level[0]
+    heading = " ".join(" ".join(box.xpath("preceding::h4[1]//text()")).lower().split())
+    for name in PYRAMID_LEVELS:
+        if heading.startswith(name + " note"):
+            return name
+    return "general"
+
+
 def page_notes(tree):
     """Notes as {"top": [...], "middle": [...], "base": [...]}, {"general": [...]} for pages
     without a pyramid, or None."""
     levels = {}
-    for level in tree.xpath("//pyramid-level-new[@notes]"):
-        names = levels.setdefault(level.get("notes"), [])
-        for label in _labels(level.xpath(".//span[contains(@class, 'pyramid-note-label')]/text()")):
+    for box in tree.xpath(PYRAMID_BOX):
+        names = levels.setdefault(_pyramid_level(box), [])
+        for label in _labels(box.xpath(".//span[contains(@class, 'pyramid-note-label')]/text()")):
             if label not in names:  # the page can render the pyramid more than once
                 names.append(label)
     levels = {key: names for key, names in levels.items() if names}
     if levels:
-        if set(levels) <= {"top", "middle", "base"}:
-            return {key: levels.get(key) or None for key in ("top", "middle", "base")}
+        if set(levels) <= set(PYRAMID_LEVELS):
+            return {key: levels.get(key) or None for key in PYRAMID_LEVELS}
         return {"general": [name for names in levels.values() for name in names]}
 
     # layout used until 2022
