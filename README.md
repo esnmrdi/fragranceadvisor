@@ -18,7 +18,7 @@ bypass. Requests are sequential and paced by randomized delays in
 `browser_client.py`.
 
 HTTP 429 responses are retried for the same URL after the server's
-`Retry-After` interval plus a five-second buffer. If that header is missing or
+`Retry-After` interval plus a two-second buffer. If that header is missing or
 invalid, the client waits five minutes plus the buffer. Other HTTP errors and
 Cloudflare challenges stop the current crawl without marking the URL complete.
 
