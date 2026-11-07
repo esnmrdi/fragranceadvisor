@@ -5,12 +5,10 @@ import json
 import re
 import unicodedata
 from pathlib import Path
-from time import sleep
 
 from browser_client import FETCH_ERRORS, BrowserClient
 from db_helper import PerfumesDBHelper
 
-REQUEST_DELAY_SECONDS = 5
 IMAGE_DIR = Path("fragrantica_images/perfumes")
 PERFUME_URL = re.compile(
     r"/perfume/(?P<brand>[^/]+)/(?P<title>.+)-\d+\.html?$",
@@ -265,50 +263,66 @@ def main(argv=None):
     db.setup()
     IMAGE_DIR.mkdir(parents=True, exist_ok=True)
 
-    with open("perfumes_manifest.txt", encoding="utf-8") as manifest:
-        perfume_urls = [line.strip() for line in manifest if line.strip()]
+    try:
+        with open("perfumes_manifest.txt", encoding="utf-8") as manifest:
+            perfume_urls = list(dict.fromkeys(
+                line.strip() for line in manifest if line.strip()
+            ))
+        db.migrate_legacy_progress(perfume_urls)
+        completed = db.completed_urls()
+    except (OSError, ValueError, RuntimeError) as exc:
+        print("Could not prepare perfume scrape: {}".format(exc))
+        db.close()
+        return 1
 
-    number_of_perfumes = len(perfume_urls)
-    start_index = db.number_of_records()
-    end_index = number_of_perfumes
+    total = len(perfume_urls)
+    pending = [url for url in perfume_urls if url not in completed]
     if args.limit is not None:
-        end_index = min(number_of_perfumes, start_index + args.limit)
+        pending = pending[:args.limit]
+    print(
+        "Perfume scrape: {} URLs in manifest, {} already complete, {} to scrape now.".format(
+            total, len(completed), len(pending)
+        ),
+        flush=True,
+    )
+
     from_page = {"title": 0, "brand": 0}
     # How many scraped rows actually have each field, so an extraction that stops working
     # (e.g. after a site redesign) shows up after a short test run instead of a long crawl.
     filled = dict.fromkeys(("year", "accords", "notes", "longevity", "sillage"), 0)
+    scraped = 0
 
     try:
         with BrowserClient() as client:
-            for index in range(start_index, end_index):
-                url = perfume_urls[index]
+            for position, url in enumerate(pending, start=1):
                 perfume, record = scrape_perfume(client, url)
+                db.add_record_for_url(url, record)
+                completed.add(url)
+                scraped += 1
                 from_page["title"] += perfume["title_source"] == "page"
                 from_page["brand"] += perfume["brand_source"] == "page"
                 filled["year"] += record[2] is not None
                 for field, value in zip(("accords", "notes", "longevity", "sillage"), record[3:]):
                     filled[field] += value != "null"
                 print({
-                    "count": "{}/{}".format(index + 1, number_of_perfumes),
+                    "progress": "{}/{}".format(position, len(pending)),
+                    "completed_total": len(completed),
                     "brand": record[0],
                     "title": perfume["title"],
                     "year": record[2],
                     "names_from": "{}/{}".format(perfume["title_source"], perfume["brand_source"]),
-                })
-                db.add_record(record)
-                sleep(REQUEST_DELAY_SECONDS)
+                }, flush=True)
     except (*FETCH_ERRORS, ValueError) as exc:
         print(
-            "Stopped at row {}: {}. Fix the problem and re-run to resume from this row.".format(
-                db.number_of_records(), exc
-            )
+            "Scrape paused: {}. {} URLs are recorded as complete; rerun to continue "
+            "with the remaining URLs.".format(exc, len(completed)),
+            flush=True,
         )
         return 1
     finally:
         db.close()
 
-    scraped = end_index - start_index
-    if scraped > 0:
+    if scraped:
         print(
             "Done: {} page(s). Names written as on the page: {} titles, {} brands "
             "(the rest fall back to the URL slug).".format(
@@ -318,6 +332,7 @@ def main(argv=None):
         print("Rows with: " + ", ".join(
             "{} {}/{}".format(field, count, scraped) for field, count in filled.items()
         ))
+    print("Completed: {} perfume URLs processed.".format(len(completed)))
     return 0
 
 
