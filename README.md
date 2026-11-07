@@ -1,4 +1,4 @@
-# fragranceadvisor
+# fragrancearchiver
 
 A Python project for collecting fragrance specifications.
 
